@@ -474,6 +474,19 @@ func GetStringFromDir(beadsDir, key string) string {
 	if err := yaml.Unmarshal(data, &root); err != nil {
 		return ""
 	}
+
+	// Try flat dotted key first (e.g. "dolt.port" as a literal YAML key).
+	// Config files commonly use this format: `dolt.port: 3309`
+	if val, ok := root[key]; ok {
+		switch s := val.(type) {
+		case string:
+			return s
+		default:
+			return fmt.Sprintf("%v", s)
+		}
+	}
+
+	// Fall back to nested key traversal (e.g. dolt: { port: 3309 })
 	parts := strings.SplitN(key, ".", 2)
 	node := root
 	for len(parts) == 2 {

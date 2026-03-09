@@ -260,6 +260,30 @@ func TestDefaultConfig(t *testing.T) {
 			t.Errorf("expected port file port 14000, got %d", cfg.Port)
 		}
 	})
+
+	t.Run("cross_rig_reads_target_config_yaml", func(t *testing.T) {
+		// When the global viper config has no dolt.port (simulating a cross-rig
+		// routing scenario where the local rig didn't set one), DefaultConfig
+		// should fall back to reading config.yaml directly from beadsDir.
+		t.Setenv("GT_ROOT", "")
+		t.Setenv("BEADS_DOLT_SERVER_PORT", "")
+
+		// Reset global config so viper has no dolt.port
+		config.ResetForTesting()
+		t.Cleanup(config.ResetForTesting)
+
+		// Create a target beadsDir with its own config.yaml specifying a port
+		targetDir := t.TempDir()
+		configYaml := filepath.Join(targetDir, "config.yaml")
+		if err := os.WriteFile(configYaml, []byte("dolt.port: 3309\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg := DefaultConfig(targetDir)
+		if cfg.Port != 3309 {
+			t.Errorf("expected port 3309 from target beadsDir config.yaml, got %d", cfg.Port)
+		}
+	})
 }
 
 func TestEnsurePortFile(t *testing.T) {

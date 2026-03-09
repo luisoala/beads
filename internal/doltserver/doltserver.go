@@ -285,6 +285,17 @@ func DefaultConfig(beadsDir string) *Config {
 		}
 	}
 
+	// Fallback: read dolt.port directly from the target beadsDir's config.yaml.
+	// This handles cross-rig prefix routing where the global viper config was
+	// initialized from the local rig, not the target rig being opened.
+	if cfg.Port == 0 {
+		if p := config.GetStringFromDir(beadsDir, "dolt.port"); p != "" {
+			if port, err := strconv.Atoi(p); err == nil && port > 0 {
+				cfg.Port = port
+			}
+		}
+	}
+
 	// Deprecated: metadata.json DoltServerPort is git-tracked and propagates
 	// to all contributors, causing cross-project data leakage (GH#2372).
 	// Emit a one-time warning but still use the value as a fallback so
