@@ -244,31 +244,26 @@ func EnsurePortFile(beadsDir string, port int) error {
 }
 
 // DefaultConfig returns config with sensible defaults.
-// Priority: env var > metadata.json > config.yaml / global config > port file > DerivePort.
+// Priority: port file > config.yaml / global config > env var > DerivePort.
 //
 // The port file (dolt-server.port) is written by Start() with the actual port
-// the server is listening on. Consulting it here ensures that commands
-// connecting to an already-running server use the correct port — even when
-// Start() fell back to DerivePort because another project occupied the default
-// port.
+// the server is listening on. It has highest priority because it reflects
+// the real port this project's server bound to — even when Start() fell back
+// to DerivePort because another project occupied the default port.
+//
+// Env vars (BEADS_DOLT_SERVER_PORT) are demoted below the port file to prevent
+// cross-town leakage: in multi-town setups, gastown's daemon translates
+// GT_DOLT_PORT → BEADS_DOLT_SERVER_PORT for all subprocesses, which would
+// send every town's bd commands to the wrong port if the env var won.
 func DefaultConfig(beadsDir string) *Config {
 	cfg := &Config{
 		BeadsDir: beadsDir,
 		Host:     "127.0.0.1",
 	}
 
-	// Check env var override first (used by tests and manual overrides)
-	if p := os.Getenv("BEADS_DOLT_SERVER_PORT"); p != "" {
-		if port, err := strconv.Atoi(p); err == nil {
-			cfg.Port = port
-			return cfg
-		}
-	}
-
-	// Check the port file (gitignored, local-only) — this is the primary
-	// persistent source. Start() writes the actual listening port here.
-	// Elevated to top priority (after env var) to prevent git-tracked values
-	// from causing cross-project data leakage (GH#2372).
+	// Port file first (gitignored, local-only) — this is the authoritative
+	// source. Start() writes the actual listening port here. Highest priority
+	// prevents env var leakage from multi-town setups (GH#2372, port-isolation).
 	if p := readPortFile(beadsDir); 0 < p {
 		cfg.Port = p
 		return cfg
@@ -296,6 +291,18 @@ func DefaultConfig(beadsDir string) *Config {
 		}
 	}
 
+	// Env var override — demoted below port file to prevent cross-town
+	// leakage (gastown daemon sets BEADS_DOLT_SERVER_PORT globally).
+	// Still useful for tests and explicit manual overrides when no port
+	// file exists yet.
+	if cfg.Port == 0 {
+		if p := os.Getenv("BEADS_DOLT_SERVER_PORT"); p != "" {
+			if port, err := strconv.Atoi(p); err == nil {
+				cfg.Port = port
+			}
+		}
+	}
+
 	// Deprecated: metadata.json DoltServerPort is git-tracked and propagates
 	// to all contributors, causing cross-project data leakage (GH#2372).
 	// Emit a one-time warning but still use the value as a fallback so
@@ -312,10 +319,24 @@ func DefaultConfig(beadsDir string) *Config {
 	}
 
 	if cfg.Port == 0 {
-		cfg.Port = DerivePort(beadsDir)
+		// In multi-town Gas Town setups, port 3307 belongs to gastown's shared
+		// Dolt server. If we're inside a Gas Town workspace, skip the default
+		// port and use a hash-derived port to avoid fighting gastown for 3307.
+		if isInsideGasTown() {
+			cfg.Port = DerivePort(beadsDir)
+		} else {
+			cfg.Port = configfile.DefaultDoltServerPort
+		}
 	}
 
 	return cfg
+}
+
+// isInsideGasTown returns true if the current process is running inside a
+// Gas Town workspace. Detected via GT_TOWN_ROOT env var (set by the gastown
+// daemon for all subprocesses) or GT_ROLE (set by gt prime).
+func isInsideGasTown() bool {
+	return os.Getenv("GT_TOWN_ROOT") != "" || os.Getenv("GT_ROLE") != ""
 }
 
 // IsRunning checks if a managed server is running for this beadsDir.
@@ -489,10 +510,13 @@ func Start(beadsDir string) (*State, error) {
 		return &State{Running: true, PID: adoptPID, Port: actualPort, DataDir: doltDir}, nil
 	}
 
-	// Start dolt sql-server
+	// Start dolt sql-server with explicit --data-dir so the data directory
+	// is visible in process args (ps) for imposter detection by gastown.
+	// Previously relied on cmd.Dir (CWD) which is fragile and invisible.
 	cmd := exec.Command(doltBin, "sql-server", //nolint:gosec // G702: doltBin is resolved from PATH, not user input
 		"-H", cfg.Host,
 		"-P", strconv.Itoa(actualPort),
+		"--data-dir", doltDir,
 	)
 	cmd.Dir = doltDir
 	cmd.Stdout = logFile
