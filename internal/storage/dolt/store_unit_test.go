@@ -286,11 +286,11 @@ func TestApplyConfigDefaults_TestModeBlocksProdPort(t *testing.T) {
 	}
 }
 
-// TestApplyConfigDefaults_EnvOverridesConfig verifies that BEADS_DOLT_PORT
-// overrides a port already set by metadata.json, even outside test mode.
-// This is the fix for hq-27t (test pollution): callers like Gas Town set
-// BEADS_DOLT_PORT to route bd to a test server instead of production.
-func TestApplyConfigDefaults_EnvOverridesConfig(t *testing.T) {
+// TestApplyConfigDefaults_EnvDoesNotOverrideExplicitPort verifies that
+// BEADS_DOLT_PORT does NOT override a port already set by metadata.json
+// or config.yaml. Env vars are only a fallback when no port is configured.
+// This prevents env var pollution across towns on the same machine.
+func TestApplyConfigDefaults_EnvDoesNotOverrideExplicitPort(t *testing.T) {
 	origTestMode := os.Getenv("BEADS_TEST_MODE")
 	origPort := os.Getenv("BEADS_DOLT_PORT")
 	defer func() {
@@ -306,16 +306,47 @@ func TestApplyConfigDefaults_EnvOverridesConfig(t *testing.T) {
 		}
 	}()
 
-	os.Unsetenv("BEADS_TEST_MODE") // NOT in test mode
+	os.Unsetenv("BEADS_TEST_MODE")
 	os.Setenv("BEADS_DOLT_PORT", "19999")
 
-	// Simulate metadata.json having set port to production default
+	// Simulate metadata.json having set port — env should NOT override it
 	cfg := &Config{ServerPort: DefaultSQLPort}
 	applyConfigDefaults(cfg)
 
-	if cfg.ServerPort != 19999 {
-		t.Errorf("expected BEADS_DOLT_PORT=19999 to override config port %d, got %d",
+	if cfg.ServerPort != DefaultSQLPort {
+		t.Errorf("expected env NOT to override explicit port %d, got %d",
 			DefaultSQLPort, cfg.ServerPort)
+	}
+}
+
+// TestApplyConfigDefaults_EnvFillsZeroPort verifies that BEADS_DOLT_PORT
+// is used as a fallback when no port is configured (ServerPort == 0).
+func TestApplyConfigDefaults_EnvFillsZeroPort(t *testing.T) {
+	origTestMode := os.Getenv("BEADS_TEST_MODE")
+	origPort := os.Getenv("BEADS_DOLT_PORT")
+	defer func() {
+		if origTestMode == "" {
+			os.Unsetenv("BEADS_TEST_MODE")
+		} else {
+			os.Setenv("BEADS_TEST_MODE", origTestMode)
+		}
+		if origPort == "" {
+			os.Unsetenv("BEADS_DOLT_PORT")
+		} else {
+			os.Setenv("BEADS_DOLT_PORT", origPort)
+		}
+	}()
+
+	os.Unsetenv("BEADS_TEST_MODE")
+	os.Setenv("BEADS_DOLT_PORT", "19999")
+
+	// No port set — env var should fill it in
+	cfg := &Config{ServerPort: 0}
+	applyConfigDefaults(cfg)
+
+	if cfg.ServerPort != 19999 {
+		t.Errorf("expected BEADS_DOLT_PORT=19999 to fill zero port, got %d",
+			cfg.ServerPort)
 	}
 }
 

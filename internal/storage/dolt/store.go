@@ -502,22 +502,26 @@ func applyConfigDefaults(cfg *Config) {
 			cfg.ServerHost = "127.0.0.1"
 		}
 	}
-	// Port resolution: BEADS_DOLT_SERVER_PORT env (or legacy BEADS_DOLT_PORT) >
-	// BEADS_TEST_MODE guard > metadata config > default.
+	// Port resolution: caller-provided port > env var > default.
+	// The caller (usually configfile.Load or doltserver.DefaultConfig) already
+	// resolved the correct per-project port from the port file / config.yaml.
+	// Env vars only apply when no port was provided (ServerPort == 0).
+	//
 	// CRITICAL: BEADS_TEST_MODE=1 forces port 1 (immediate fail) if the resolved port
 	// is the production port (DefaultSQLPort). This prevents test databases from leaking
 	// onto production even when the port env var is set to 3307 by Gas Town's beads module.
-	// Only an explicit non-production port (e.g., 43211 for a test server)
-	// overrides test mode — that's a deliberate test server assignment.
-	envPort := os.Getenv("BEADS_DOLT_SERVER_PORT")
-	if envPort == "" {
-		envPort = os.Getenv("BEADS_DOLT_PORT") // legacy fallback
-	}
-	if envPort != "" {
-		if p, err := strconv.Atoi(envPort); err == nil && p > 0 {
-			cfg.ServerPort = p
+	if cfg.ServerPort == 0 {
+		envPort := os.Getenv("BEADS_DOLT_SERVER_PORT")
+		if envPort == "" {
+			envPort = os.Getenv("BEADS_DOLT_PORT") // legacy fallback
 		}
-	} else if cfg.ServerPort == 0 {
+		if envPort != "" {
+			if p, err := strconv.Atoi(envPort); err == nil && p > 0 {
+				cfg.ServerPort = p
+			}
+		}
+	}
+	if cfg.ServerPort == 0 {
 		cfg.ServerPort = DefaultSQLPort
 	}
 	// Test mode guard: if we'd hit production, force port 1 instead.
